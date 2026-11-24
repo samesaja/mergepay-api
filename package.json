@@ -23,6 +23,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "gen:sep10key": "tsx scripts/gen-sep10-key.ts",
     "db:migration-health": "tsx scripts/check-migration-health.ts",
+    "db:migration-health:json": "tsx scripts/check-migration-health.ts --json",
     "migrate:health": "tsx scripts/check-migration-health.ts"
   },
   "prisma": {

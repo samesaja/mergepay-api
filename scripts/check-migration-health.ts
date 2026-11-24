@@ -37,6 +37,16 @@ export interface MigrationHealthStatus {
   message: string;
   diagnostics: string[];
   pendingMigrationsCount?: number;
+  pendingMigrations?: string[];
+  failedMigration?: string;
+  driftDetected?: boolean;
+  checkedAt?: string;
+}
+
+/** Extract migration identifiers (e.g. `20261024_add_index`) from Prisma CLI output. */
+export function extractMigrationNames(output: string): string[] {
+  const matches = output.match(/\b\d{8,14}_[A-Za-z0-9_]+\b/g);
+  return matches ? [...new Set(matches)] : [];
 }
 
 export type CommandRunner = (
@@ -131,10 +141,18 @@ export function checkMigrationHealth(options?: {
       /unapplied migration/i.test(statusOutput)
     ) {
       const match = statusOutput.match(/(\d+)\s+migration.*have not yet been applied/i);
-      const pendingCount = match ? parseInt(match[1], 10) : undefined;
+      const pendingNames = extractMigrationNames(statusOutput);
+      const pendingCount = match
+        ? parseInt(match[1], 10)
+        : pendingNames.length > 0
+          ? pendingNames.length
+          : undefined;
       diagnostics.push("⚠️ Database has pending unapplied migrations");
       if (pendingCount !== undefined) {
         diagnostics.push(`ℹ️ ${pendingCount} migration(s) awaiting application`);
+      }
+      if (pendingNames.length > 0) {
+        diagnostics.push(`ℹ️ Pending migration IDs: ${pendingNames.join(", ")}`);
       }
       return {
         healthy: false,
@@ -142,6 +160,8 @@ export function checkMigrationHealth(options?: {
         message: "Target database is behind: Pending migrations require execution",
         diagnostics,
         pendingMigrationsCount: pendingCount,
+        ...(pendingNames.length > 0 ? { pendingMigrations: pendingNames } : {}),
+        checkedAt: new Date().toISOString(),
       };
     }
 
@@ -168,6 +188,8 @@ export function checkMigrationHealth(options?: {
         statusCode: "schema_drift",
         message: "Database schema has drifted from prisma/schema.prisma: add a migration to reconcile",
         diagnostics,
+        driftDetected: true,
+        checkedAt: new Date().toISOString(),
       };
     }
 
@@ -176,6 +198,8 @@ export function checkMigrationHealth(options?: {
       statusCode: "synced",
       message: "Database migration health is optimal. Database is ready for deployment.",
       diagnostics,
+      driftDetected: false,
+      checkedAt: new Date().toISOString(),
     };
   } catch (err: unknown) {
     // `prisma migrate status` exits non-zero when migrations are pending or
@@ -183,20 +207,34 @@ export function checkMigrationHealth(options?: {
     // problem.
     const errorText = errorOutput(err);
     if (/failed to apply|migration.*(?:failed|was started but)/i.test(errorText)) {
+      const failedNames = extractMigrationNames(errorText);
       diagnostics.push("❌ A migration failed to apply and must be resolved");
+      if (failedNames.length > 0) {
+        diagnostics.push(`ℹ️ Failed migration ID: ${failedNames[0]}`);
+      }
       return {
         healthy: false,
         statusCode: "failed_migration",
         message: "Target database has a failed migration: resolve it with `prisma migrate resolve`",
         diagnostics,
+        ...(failedNames.length > 0 ? { failedMigration: failedNames[0] } : {}),
+        checkedAt: new Date().toISOString(),
       };
     }
     if (/have not yet been applied|unapplied migration/i.test(errorText)) {
       const match = errorText.match(/(\d+)\s+migrations?.*have not yet been applied/i);
-      const pendingCount = match ? parseInt(match[1], 10) : undefined;
+      const pendingNames = extractMigrationNames(errorText);
+      const pendingCount = match
+        ? parseInt(match[1], 10)
+        : pendingNames.length > 0
+          ? pendingNames.length
+          : undefined;
       diagnostics.push("⚠️ Database has pending unapplied migrations");
       if (pendingCount !== undefined) {
         diagnostics.push(`ℹ️ ${pendingCount} migration(s) awaiting application`);
+      }
+      if (pendingNames.length > 0) {
+        diagnostics.push(`ℹ️ Pending migration IDs: ${pendingNames.join(", ")}`);
       }
       return {
         healthy: false,
@@ -204,6 +242,8 @@ export function checkMigrationHealth(options?: {
         message: "Target database is behind: Pending migrations require execution",
         diagnostics,
         pendingMigrationsCount: pendingCount,
+        ...(pendingNames.length > 0 ? { pendingMigrations: pendingNames } : {}),
+        checkedAt: new Date().toISOString(),
       };
     }
     const connectionReason = parseConnectionError(errorText);

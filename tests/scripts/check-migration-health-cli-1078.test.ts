@@ -106,4 +106,40 @@ describe("migration health CLI (#1078)", () => {
     expect(log.mock.calls[0][0]).toContain("MERGEPAY DATABASE MIGRATION HEALTH REPORT");
     expect(log.mock.calls[0][0]).toContain("STATUS: UNHEALTHY (MISSING_DATABASE_URL)");
   });
+
+  it("extracts specific pending and failed migration names and driftDetected flags for CI reporting (#1185)", () => {
+    const pendingResult = checkMigrationHealth({
+      databaseUrl: DB_URL,
+      execSyncFn: (cmd) => {
+        if (cmd.includes("prisma migrate status")) {
+          return "Following migration have not yet been applied: 20261024_add_index, 20261025_add_column. 2 migrations have not yet been applied.";
+        }
+        return "";
+      },
+    });
+
+    expect(pendingResult.statusCode).toBe("pending_migrations");
+    expect(pendingResult.pendingMigrationsCount).toBe(2);
+    expect(pendingResult.pendingMigrations).toEqual([
+      "20261024_add_index",
+      "20261025_add_column",
+    ]);
+    expect(pendingResult.diagnostics).toContain(
+      "ℹ️ Pending migration IDs: 20261024_add_index, 20261025_add_column"
+    );
+
+    const driftResult = checkMigrationHealth({
+      databaseUrl: DB_URL,
+      execSyncFn: (cmd) => {
+        if (cmd.includes("prisma migrate diff")) {
+          throw Object.assign(new Error("exit code 2"), { status: 2, stdout: "-- drift" });
+        }
+        return "";
+      },
+    });
+
+    expect(driftResult.statusCode).toBe("schema_drift");
+    expect(driftResult.driftDetected).toBe(true);
+    expect(typeof driftResult.checkedAt).toBe("string");
+  });
 });

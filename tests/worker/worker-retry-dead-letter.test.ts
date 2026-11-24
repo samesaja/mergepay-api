@@ -156,6 +156,60 @@ describe("Worker Job Retry and Dead-Letter Handling (#881)", () => {
         })
       );
     });
+
+    it("short-circuits retries when onIndeterminate confirms the transaction already applied on the ledger (#1184)", async () => {
+      const task = vi.fn(async () => {
+        throw new Error("Request timed out waiting for Horizon");
+      });
+      const sleep = vi.fn(async () => {});
+      const onIndeterminate = vi.fn(async () => true);
+      const onDeadLetter = vi.fn(async () => {});
+
+      const result = await executeWorkerJobWithRetry(task, {
+        taskName: "settlement_submit",
+        jobType: "settlement",
+        jobId: "settle_123",
+        sleep,
+        onIndeterminate,
+        onDeadLetter,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.deadLettered).toBe(false);
+      expect(result.attempts).toBe(1);
+      expect(onIndeterminate).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(onDeadLetter).not.toHaveBeenCalled();
+    });
+
+    it("records a worker.task.dead_letter audit log when auditDeadLetter is enabled (#1184)", async () => {
+      const task = vi.fn(async () => {
+        throw new AppError(400, "XDR_MISMATCH", "Envelope destination mismatch");
+      });
+      const sleep = vi.fn(async () => {});
+
+      const result = await executeWorkerJobWithRetry(task, {
+        taskName: "settlement_submit",
+        jobType: "settlement",
+        jobId: "settle_dead_1",
+        groupId: "grp_1",
+        auditDeadLetter: true,
+        sleep,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.deadLettered).toBe(true);
+      expect(result.lastCategory).toBe("permanent");
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: "worker.task.dead_letter",
+            entityType: "settlement",
+            entityId: "settle_dead_1",
+          }),
+        })
+      );
+    });
   });
 
   describe("processPendingTreasuryMultisig with retry and dead-letter", () => {

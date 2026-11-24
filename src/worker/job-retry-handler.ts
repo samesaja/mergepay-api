@@ -9,12 +9,15 @@
  */
 import { createLogger } from "../lib/logger";
 import { jobLogger } from "../lib/worker-logger";
+import { audit } from "../services/audit";
+import { AuditAction } from "../services/audit-actions";
 import {
   asJobError,
   retryDelayMs,
   type JobFailureCategory,
   type RetryPolicy,
 } from "../services/job-retry";
+import { recordTaskDeadLetter, recordTaskFailure } from "./health";
 
 const log = createLogger({ name: "worker:retry-handler" });
 
@@ -28,6 +31,17 @@ export interface WorkerJobExecutionOptions {
   policy?: RetryPolicy;
   sleep?: (ms: number) => Promise<void>;
   auditDeadLetter?: boolean;
+  /**
+   * Optional recovery hook for indeterminate failures (e.g. timeouts or dropped
+   * sockets where a Stellar transaction may have already applied on the ledger).
+   * If this hook resolves to `true`, the job is treated as already concluded and
+   * no further retry or dead-letter transition is performed.
+   */
+  onIndeterminate?: (info: {
+    attempt: number;
+    reason: string;
+    error: unknown;
+  }) => Promise<boolean>;
   onRetry?: (info: {
     attempt: number;
     delayMs: number;
@@ -49,6 +63,8 @@ export interface WorkerJobExecutionResult<T> {
   error?: unknown;
   attempts: number;
   deadLettered: boolean;
+  lastCategory?: JobFailureCategory;
+  lastReason?: string;
 }
 
 export const DEFAULT_WORKER_JOB_POLICY: RetryPolicy = {
@@ -97,9 +113,38 @@ export async function executeWorkerJobWithRetry<T>(
     } catch (error) {
       lastError = error;
       const classified = asJobError(error);
-      const { category, retryable, message: reason } = classified;
+      let { category, retryable } = classified;
+      const { message: reason } = classified;
+
+      if (category === "indeterminate" && options.onIndeterminate) {
+        const concluded = await options.onIndeterminate({
+          attempt,
+          reason,
+          error,
+        });
+        if (concluded) {
+          job.log("completed", {
+            task: taskName,
+            attempt,
+            maxAttempts: policy.maxAttempts,
+            outcome: "already_applied",
+          });
+          return {
+            success: true,
+            attempts: attempt,
+            deadLettered: false,
+            lastCategory: category,
+            lastReason: reason,
+          };
+        }
+        category = "transient";
+        retryable = true;
+      }
+
+      recordTaskFailure(taskName);
 
       if (!retryable || attempt >= policy.maxAttempts) {
+        recordTaskDeadLetter(taskName);
         job.error(error, {
           task: taskName,
           attempt,
@@ -110,6 +155,25 @@ export async function executeWorkerJobWithRetry<T>(
           reason,
           outcome: "dead_letter",
         });
+
+        if (options.auditDeadLetter) {
+          await audit({
+            userId: options.userId ?? null,
+            groupId: options.groupId ?? null,
+            actorType: "worker",
+            action: AuditAction.WORKER_TASK_DEAD_LETTER,
+            entityType: jobType,
+            entityId: jobId,
+            outcome: "failure",
+            metadata: {
+              task: taskName,
+              attempts: attempt,
+              maxAttempts: policy.maxAttempts,
+              category,
+              reason,
+            },
+          }).catch(() => undefined);
+        }
 
         if (options.onDeadLetter) {
           await options.onDeadLetter({
@@ -125,6 +189,8 @@ export async function executeWorkerJobWithRetry<T>(
           error,
           attempts: attempt,
           deadLettered: true,
+          lastCategory: category,
+          lastReason: reason,
         };
       }
 

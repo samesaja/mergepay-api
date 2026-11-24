@@ -351,6 +351,17 @@ describe("challenge time-bound verification (#709)", () => {
       status: 401,
       code: "CHALLENGE_WINDOW_TOO_LONG",
     });
+    expect(
+      (h.prisma.auditLog as { create: ReturnType<typeof vi.fn> }).create
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "auth.challenge.rejected",
+          entityType: "auth_challenge",
+          entityId: client.publicKey(),
+        }),
+      })
+    );
   });
 
   it("still accepts a challenge inside the skew tolerance past maxTime", async () => {

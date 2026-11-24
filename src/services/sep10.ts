@@ -257,7 +257,21 @@ function isValidAccount(account: string): boolean {
  * structural failures below — without ever revealing *which* structural
  * detail disagreed.
  */
-function invalidChallengeWindow(reason: "not_yet_valid" | "window_too_long"): never {
+function invalidChallengeWindow(
+  reason: "not_yet_valid" | "window_too_long",
+  account?: string
+): never {
+  if (account) {
+    void audit({
+      action: AuditAction.AUTH_CHALLENGE_REJECTED,
+      entityType: "auth_challenge",
+      entityId: account,
+      metadata: {
+        reason,
+        challengeValiditySeconds: CHALLENGE_VALIDITY_SECONDS,
+      },
+    });
+  }
   if (reason === "not_yet_valid") {
     throw Errors.challengeNotYetValid(
       "Authentication challenge is not valid yet. Request a new challenge and sign it promptly."
@@ -308,13 +322,13 @@ export function validateChallengeTimeBounds(
     expiredChallenge(account);
   }
   if (minTime > currentSeconds + CLOCK_SKEW_TOLERANCE_SECONDS) {
-    invalidChallengeWindow("not_yet_valid");
+    invalidChallengeWindow("not_yet_valid", account);
   }
   if (
     maxTime >
     minTime + CHALLENGE_VALIDITY_SECONDS + CLOCK_SKEW_TOLERANCE_SECONDS
   ) {
-    invalidChallengeWindow("window_too_long");
+    invalidChallengeWindow("window_too_long", account);
   }
 }
 

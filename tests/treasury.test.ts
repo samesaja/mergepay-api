@@ -55,6 +55,8 @@ import { buildApp } from "../src/app";
 import { signToken } from "../src/plugins/auth";
 import { stellar, memoText } from "../src/services/stellar";
 import { config } from "../src/config";
+import { withTreasuryProposalAuditTx } from "../src/services/treasury";
+import { AuditAction } from "../src/services/audit-actions";
 
 const prisma = h.prisma;
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -603,6 +605,51 @@ describe("POST /treasury-transactions/:id/confirm — audit events (issue #367)"
     expect(prisma.auditLog.create.mock.calls.length).toBe(auditCallsBefore);
     expect(prisma.treasuryTransaction.update.mock.calls.length).toBe(
       updateCallsBefore
+    );
+  });
+});
+
+describe("withTreasuryProposalAuditTx transactional wrapper (#1182)", () => {
+  it("records proposal state mutation with before/after status and scrubs sensitive metadata inside the transaction", async () => {
+    prisma.auditLog.create.mockResolvedValueOnce({ id: "audit_prop_1" });
+
+    const updated = await withTreasuryProposalAuditTx(
+      {
+        actorId: admin.id,
+        actorPublicKey: admin.stellarPublicKey,
+        groupId: "group_1",
+        proposalId: "prop_1182",
+        action: AuditAction.TREASURY_PROPOSAL_SIGNED,
+        previousStatus: "awaiting_signatures",
+        nextStatus: "submitted",
+        metadata: {
+          txHash: "abc123hash",
+          signatureCount: 2,
+          threshold: 2,
+          secretKey: "S_SHOULD_BE_REDACTED",
+        },
+      },
+      async () => ({ id: "prop_1182", status: "submitted" })
+    );
+
+    expect(updated.status).toBe("submitted");
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: admin.id,
+          groupId: "group_1",
+          action: "treasury.proposal.signed",
+          entityType: "treasury_proposal",
+          entityId: "prop_1182",
+          metadata: expect.objectContaining({
+            previousStatus: "awaiting_signatures",
+            nextStatus: "submitted",
+            txHash: "abc123hash",
+            secretKey: "[REDACTED]",
+          }),
+        }),
+      })
     );
   });
 });

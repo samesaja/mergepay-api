@@ -309,13 +309,13 @@ export async function auditMultisigActionTx(
   tx: Prisma.TransactionClient,
   params: MultisigAuditParams
 ): Promise<void> {
-  await auditTx(tx, {
-    userId: params.userId ?? null,
+  await logActionTx(tx, {
+    actorId: params.userId ?? null,
     groupId: params.groupId,
     actorPublicKey: params.actorPublicKey ?? null,
     action: params.action,
-    entityType: params.entityType ?? "treasury_proposal",
-    entityId: params.proposalId,
+    resourceType: params.entityType ?? "treasury_proposal",
+    resourceId: params.proposalId,
     correlationId: params.correlationId ?? null,
     outcome: params.outcome ?? "success",
     metadata: params.metadata,

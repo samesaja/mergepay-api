@@ -434,4 +434,35 @@ describe("the middleware is the only validator", () => {
     expect(sep24InitQuerySchema.safeParse({ lang: "en" }).success).toBe(true);
     expect(sep24InitQuerySchema.safeParse({ nope: "1" }).success).toBe(false);
   });
+
+  it("sanitizes HTML tags and invisible control characters from anchorName, walletName, and extraMetadata (#1181)", async () => {
+    const parsedDeposit = sep24DepositRequestSchema.parse({
+      assetCode: "usdc",
+      anchorName: "  <script>alert(1)</script>TestAnchor\u200B  ",
+      walletName: "  <b>MergePay\u0007Wallet</b> ",
+      extraMetadata: {
+        note: "<b>clean me\u200C</b>",
+      },
+    });
+
+    expect(parsedDeposit.assetCode).toBe("USDC");
+    expect(parsedDeposit.anchorName).toBe("alert(1)TestAnchor");
+    expect(parsedDeposit.walletName).toBe("MergePayWallet");
+    expect(parsedDeposit.extraMetadata).toEqual({ note: "clean me" });
+
+    const res = await post("/api/v1/sep24/deposit", {
+      assetCode: "usdc",
+      anchorName: "  <b>CustomAnchor</b>\u200B ",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(prisma.anchorSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          anchorName: "CustomAnchor",
+          assetCode: "USDC",
+        }),
+      })
+    );
+  });
 });

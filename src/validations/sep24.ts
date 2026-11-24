@@ -25,6 +25,7 @@ import {
   stellarAmountSchema,
   stellarPublicKeySchema,
 } from "../lib/stellar-validation";
+import { sanitizeText, sanitizedTextField } from "../lib/sanitize-text";
 import { paginationQuerySchema } from "../lib/pagination";
 import {
   SEP24_TRANSACTION_STATUSES,
@@ -364,6 +365,24 @@ function serializedByteLength(value: unknown): number {
   }
 }
 
+function sanitizeExtraMetadataValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeExtraMetadataValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        sanitizeText(k),
+        sanitizeExtraMetadataValue(v),
+      ])
+    );
+  }
+  return value;
+}
+
 /** Free-form client metadata, bounded so it cannot carry an unbounded payload. */
 export const sep24ExtraMetadataSchema = z
   .record(z.string(), z.unknown())
@@ -372,7 +391,8 @@ export const sep24ExtraMetadataSchema = z
   })
   .refine((value) => serializedByteLength(value) <= SEP24_EXTRA_METADATA_MAX_BYTES, {
     message: `extraMetadata must be at most ${SEP24_EXTRA_METADATA_MAX_BYTES} bytes when serialized`,
-  });
+  })
+  .transform((value) => sanitizeExtraMetadataValue(value) as Record<string, unknown>);
 
 const sharedFields = {
   assetCode: sep24AssetCodeSchema,
@@ -382,8 +402,8 @@ const sharedFields = {
   to: sep24AccountSchema.optional(),
   memo: sep24MemoSchema,
   memoType: sep24MemoTypeSchema.optional(),
-  walletName: z.string().trim().min(1).max(120).optional(),
-  anchorName: z.string().max(64).optional(),
+  walletName: z.string().transform(sanitizeText).pipe(z.string().min(1).max(120)).optional(),
+  anchorName: z.string().transform(sanitizeText).pipe(z.string().max(64)).optional(),
   refundAddress: sep24AccountSchema.optional(),
   refundMemo: sep24MemoSchema,
   refundMemoType: sep24MemoTypeSchema.optional(),

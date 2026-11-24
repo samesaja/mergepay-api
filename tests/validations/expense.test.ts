@@ -446,6 +446,35 @@ describe("createExpenseSchema", () => {
       });
       expect(result.success).toBe(true);
     });
+
+    it("rejects percentage split where one participant has a missing or zero percent even if others sum to 100 (#1183)", () => {
+      const missingPercent = createExpenseSchema.safeParse({
+        ...validBase,
+        splitType: "percentage",
+        shares: [{ userId: "user_1", percent: 100 }, { userId: "user_2" }],
+      });
+      expect(missingPercent.success).toBe(false);
+
+      const zeroPercent = createExpenseSchema.safeParse({
+        ...validBase,
+        splitType: "percentage",
+        shares: [
+          { userId: "user_1", percent: 100 },
+          { userId: "user_2", percent: 0 },
+        ],
+      });
+      expect(zeroPercent.success).toBe(false);
+    });
+
+    it("rejects equal split when total stroops cannot cover at least 1 stroop per participant (#1183)", () => {
+      const tinyEqual = createExpenseSchema.safeParse({
+        ...validBase,
+        amount: "0.0000001",
+        splitType: "equal",
+        shares: [{ userId: "user_1" }, { userId: "user_2" }],
+      });
+      expect(tinyEqual.success).toBe(false);
+    });
   });
 });
 

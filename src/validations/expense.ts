@@ -122,7 +122,36 @@ export const createExpenseSchema = z
       }
     }
 
+    if (val.splitType === "equal") {
+      const totalStroops = stroopsIfValid(val.amount);
+      if (totalStroops !== undefined && totalStroops < BigInt(val.shares.length)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Expense amount (${val.amount}) is too small to split equally across ${val.shares.length} participants without zero-amount shares`,
+          path: ["shares"],
+        });
+      }
+    }
+
     if (val.splitType === "percentage") {
+      if (!val.shares.every((s) => typeof s.percent === "number" && Number.isFinite(s.percent))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Every share in a percentage split must include a percent value",
+          path: ["shares"],
+        });
+      } else {
+        for (let i = 0; i < val.shares.length; i++) {
+          if (val.shares[i]!.percent! <= 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Share percentage for "${val.shares[i]!.userId}" must be greater than zero`,
+              path: ["shares", i, "percent"],
+            });
+          }
+        }
+      }
+
       const total = val.shares.reduce((sum, s) => sum + (s.percent ?? 0), 0);
       if (Math.abs(total - 100) >= 0.01) {
         ctx.addIssue({
